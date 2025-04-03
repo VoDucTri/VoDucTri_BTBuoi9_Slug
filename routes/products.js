@@ -1,33 +1,24 @@
-const { ConnectionCheckOutFailedEvent } = require('mongodb');
 var express = require('express');
 var router = express.Router();
-let categoryModel = require('../schemas/category');  // Import đúng mô hình category
-let productModel = require('../schemas/product');  // Import đúng mô hình product
+let productModel = require('../schemas/product');  
+let categoryModel = require('../schemas/category');  
 const slugify = require('slugify');
+const mongoose = require('mongoose');  
 
-function buildQuery(obj){
-  console.log(obj);
+function buildQuery(obj) {
   let result = {};
-  if(obj.name){
-    result.name=new RegExp(obj.name,'i');
+  if (obj.name) {
+    result.name = new RegExp(obj.name, 'i');
   }
-  result.price = {};
-  if(obj.price){
-    if(obj.price.$gte){
+  if (obj.price) {
+    result.price = {};
+    if (obj.price.$gte) {
       result.price.$gte = obj.price.$gte;
-    }else{
-      result.price.$gte = 0
     }
-    if(obj.price.$lte){
+    if (obj.price.$lte) {
       result.price.$lte = obj.price.$lte;
-    }else{
-      result.price.$lte = 10000;
     }
-  }else{
-    result.price.$gte = 0;
-    result.price.$lte = 10000;
   }
-  console.log(result);
   return result;
 }
 
@@ -58,19 +49,21 @@ router.get('/:id', async function(req, res, next) {
   }
 });
 
-/* POST tạo sản phẩm mới và tự động sinh slug */
+/* POST tạo sản phẩm mới */
 router.post('/', async function(req, res, next) {
   try {
     let { name, categoryId, price } = req.body;
-    let slug = slugify(name, { lower: true });
 
-    // Kiểm tra categoryId có hợp lệ không
-    let category = await categoryModel.findById(categoryId);  // Truy vấn category theo ObjectId
+    if (!mongoose.Types.ObjectId.isValid(categoryId)) {
+      return res.status(400).send({ success: false, message: 'Invalid categoryId' });
+    }
+
+    let category = await categoryModel.findById(categoryId);
     if (!category) {
       return res.status(404).send({ success: false, message: 'Category not found' });
     }
 
-    let newProduct = new productModel({ name, slug, categoryId, price });
+    let newProduct = new productModel({ name, category: category._id, price });
     await newProduct.save();
     res.status(201).send({
       success: true,
@@ -88,66 +81,99 @@ router.put('/:id', async function(req, res, next) {
   try {
     let updateObj = {};
     let body = req.body;
-    if(body.name){
+    if (body.name) {
       updateObj.name = body.name;
     }
-    if(body.price){
+    if (body.price) {
       updateObj.price = body.price;
     }
-    if(body.quantity){
+    if (body.quantity) {
       updateObj.quantity = body.quantity;
     }
-    if(body.category){
-      let cate = await CategoryModel.findOne({name:req.body.category});
-      if(!cate){
-        res.status(404).send({
-          success:false,
-          message:error.message
+    if (body.category) {
+      let cate = await categoryModel.findOne({ name: body.category }); 
+      if (!cate) {
+        return res.status(404).send({ 
+          success: false,
+          message: 'Category not found'
         });
       }
+      updateObj.category = cate._id; 
     }
-    let updatedProduct = await productModel.findByIdAndUpdate(req.params.id,
+    let updatedProduct = await productModel.findByIdAndUpdate(
+      req.params.id,
       updateObj,
-      {new:true})
-    res.status(200).send({
-      success:true,
-      data:updatedProduct
-    });
-  } catch (error) {
-    res.status(404).send({
-      success:false,
-      message:error.message
-    });
-  }
-});
-router.delete('/:id', async function(req, res, next) {
-  try {
-    let product = await productModel.findById(req.params.id);
-    if(product){
-      let deletedProduct = await productModel.findByIdAndUpdate(req.params.id,
-        {
-          isDeleted:true
-        },
-        {new:true})
-        res.status(200).send({
-          success:true,
-          data:deletedProduct
-        });
-    }else{
-      res.status(404).send({
-        success:false,
-        message:"ID khong ton tai"
+      { new: true }
+    );
+    if (!updatedProduct) {
+      return res.status(404).send({
+        success: false,
+        message: 'Product not found'
       });
     }
+    res.status(200).send({
+      success: true,
+      data: updatedProduct
+    });
   } catch (error) {
-    res.status(404).send({
-      success:false,
-      message:error.message
+    res.status(400).send({
+      success: false,
+      message: error.message
     });
   }
 });
 
-/* GET sản phẩm theo categorySlug và productSlug */
+router.delete('/:id', async function(req, res, next) {
+  try {
+    let product = await productModel.findById(req.params.id);
+    if (!product) {
+      return res.status(404).send({
+        success: false,
+        message: "ID khong ton tai"
+      });
+    }
+    let deletedProduct = await productModel.findByIdAndUpdate(
+      req.params.id,
+      { isDeleted: true },
+      { new: true }
+    );
+    res.status(200).send({
+      success: true,
+      data: deletedProduct
+    });
+  } catch (error) {
+    res.status(400).send({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/* GET tất cả sản phẩm trong category theo slug */
+router.get('/slug/:category', async function(req, res, next) {
+  try {
+    let categorySlug = req.params.category;
+
+    // Tìm category theo slug
+    let category = await categoryModel.findOne({ slug: categorySlug });
+    if (!category) {
+      return res.status(404).send({ success: false, message: 'Category not found' });
+    }
+
+    let products = await productModel.find({ category: category._id }).populate('category');
+    res.status(200).send({
+      success: true,
+      data: products
+    });
+  } catch (error) {
+    res.status(400).send({
+      success: false,
+      message: error.message
+    });
+  }
+});
+
+/* GET sản phẩm cụ thể theo categorySlug và productSlug */
 router.get('/slug/:category/:product', async function(req, res, next) {
   try {
     let categorySlug = req.params.category;
@@ -158,14 +184,20 @@ router.get('/slug/:category/:product', async function(req, res, next) {
       return res.status(404).send({ success: false, message: 'Category not found' });
     }
 
-    let product = await productModel.findOne({ slug: productSlug, categoryId: category._id });
+    let product = await productModel.findOne({ slug: productSlug, category: category._id }).populate('category');
     if (!product) {
       return res.status(404).send({ success: false, message: 'Product not found' });
     }
 
-    res.status(200).send({ success: true, data: product });
+    res.status(200).send({
+      success: true,
+      data: product
+    });
   } catch (error) {
-    res.status(400).send({ success: false, message: error.message });
+    res.status(400).send({
+      success: false,
+      message: error.message
+    });
   }
 });
 
